@@ -1,0 +1,349 @@
+<!-- AstroQueue Secure MultiRoom - Index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+  <meta http-equiv="Pragma" content="no-cache"/>
+  <meta http-equiv="Expires" content="0"/>
+  <title>사글타 대기줄 (SGT Queue)</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:24px}
+    .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input,select{padding:8px;border:1px solid #d1d5db;border-radius:8px}
+    button{padding:8px 12px;border:0;border-radius:8px;background:#111827;color:#fff;cursor:pointer}
+    button.secondary{background:#6b7280}
+    small{color:#6b7280}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
+    .admin{background:#11182710}
+    .pill{display:inline-block;padding:2px 8px;background:#111827;color:#fff;border-radius:999px;font-size:12px}
+    .hint{background:#f9fafb;border:1px solid #e5e7eb;padding:8px;border-radius:8px}
+    .build-badge{position:fixed;right:12px;bottom:12px;padding:6px 10px;border-radius:8px;background:#111827;color:#fff;font-size:12px;opacity:.85;z-index:9999}
+  </style>
+</head>
+<body>
+  <div class="build-badge">BUILD: <?= BUILD ?></div>
+  <h2>⭐ 사글타 전용 대기줄 ⭐</h2>
+
+  <!-- 방 선택 -->
+  <div class="card">
+    <div class="row">
+      <label>방 선택</label>
+      <select id="roomSel"></select>
+      <button id="reloadRooms" type="button" class="secondary">방 새로고침</button>
+    </div>
+    <small id="roomInfo">—</small>
+  </div>
+
+  <!-- 사용자 액션 -->
+  <div class="card">
+    <div class="row">
+      <input id="name" type="text" placeholder="닉네임/이름"/>
+      <button id="joinBtn"  type="button">순번 받기</button>
+      <button id="leaveBtn" type="button" class="secondary">삭제(대기 취소)</button>
+      <button id="refreshBtn" type="button" class="secondary">새로고침</button>
+    </div>
+    <div class="hint" style="margin-top:8px;">
+      <small>
+        ▶ 이 브라우저에 저장된 내 대기 토큰으로만 삭제할 수 있어요.<br/>
+        ▶ 브라우저를 바꾸거나 기록을 지우면 삭제가 안 될 수 있어요(그땐 방 운영자에게 요청).
+      </small>
+    </div>
+  </div>
+
+  <!-- 대기열 표시 -->
+  <div class="card">
+    <div class="row">
+      <div><span class="pill" id="qlen">0</span> 명 대기중</div>
+    </div>
+    <table id="queueTbl">
+      <thead><tr><th>순번</th><th>이름</th><th>대기 시작</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- 관리자 -->
+  <div class="card admin" style="display:none">
+    <h3>관리자 패널</h3>
+    <div class="row">
+      <input id="adminkey" type="text" placeholder="관리자 키"/>
+      <button id="nextBtn"   type="button">다음 호출</button>
+      <button id="finishBtn" type="button" class="secondary">진행 완료</button>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <input id="newRoomName" type="text" placeholder="새 방 이름 (예: 블랑쉬님-점성술)"/>
+      <button id="mkRoomBtn"   type="button" class="secondary">방 만들기</button>
+      <button id="deactRoomBtn" type="button" class="secondary">현재 방 비활성</button>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <input id="delName" type="text" placeholder="삭제할 이름(강제)"/>
+      <button id="delBtn"   type="button" class="secondary">이름 삭제</button>
+      <button id="clearBtn" type="button" class="secondary">대기 전원 삭제</button>
+    </div>
+    <div id="adminMsg" style="margin-top:8px;"><small>—</small></div>
+  </div>
+
+  <script>
+    // ===== 유틸 =====
+    const $  = s => document.querySelector(s);
+    const qs = (k,d='') => (new URL(location.href)).searchParams.get(k)||d;
+
+    // ===== DOM =====
+    const roomSel = $('#roomSel');
+    const nameInput = $('#name');
+    const adminkeyInput = $('#adminkey');
+    const newRoomNameInput = $('#newRoomName');
+    const delNameInput = $('#delName');
+
+    // URL 프리필
+    if (qs('name')) nameInput.value = qs('name');
+    if (qs('key'))  adminkeyInput.value = qs('key');
+
+    // ✅ 관리자 패널 토글: ?admin=1 이나 ?key=아무값 이면 표시 (권한은 서버에서 검사)
+    (function(){
+      const showAdmin = (qs('admin') === '1') || !!qs('key');
+      const el = document.querySelector('.admin');
+      if (el) el.style.display = showAdmin ? '' : 'none';
+    })();
+
+    function qs(k) {
+    return new URLSearchParams(location.search).get(k);
+    }
+    const BUILD = 'build-' + new Date().toISOString().replace(/[:.]/g, '-');
+
+    function doGet(e){
+      ensureSetup_();
+      const t = HtmlService.createTemplateFromFile('Index');
+      t.BUILD = BUILD;
+      return t.evaluate()
+              .setTitle('AstroQueue Secure MultiRoom')
+              .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    }
+
+    // 방 목록 로드
+    function loadRooms(selectRoomId){
+      google.script.run
+        .withSuccessHandler(rooms=>{
+          roomSel.innerHTML = '';
+          if (!rooms.length){
+            const op = document.createElement('option');
+            op.value=''; op.textContent='(활성 방이 없습니다)';
+            roomSel.appendChild(op);
+            $('#roomInfo').textContent = '관리자에서 방을 먼저 만드세요.';
+            return;
+          }
+          rooms.forEach(r=>{
+            const op=document.createElement('option');
+            op.value=r.roomId; op.textContent=`${r.roomName} (${r.roomId})`;
+            roomSel.appendChild(op);
+          });
+          const fromUrl = qs('room');
+          if (selectRoomId) roomSel.value = selectRoomId;
+          else if (fromUrl) roomSel.value = fromUrl;
+          render();
+        })
+        .withFailureHandler(err=>{
+          alert('방 목록 로드 오류: ' + (err?.message || err));
+        })
+        .listRooms();
+    }
+
+    // 상태 렌더 (내 위치 표시 제거)
+    function render(){
+      const roomId = roomSel.value;
+      if (!roomId){
+        $('#qlen').textContent='0';
+        $('#queueTbl tbody').innerHTML='';
+        $('#roomInfo').textContent='—';
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(state=>{
+          $('#qlen').textContent = state.queueLength;
+          $('#roomInfo').textContent = `현재 방: ${state.room.roomName} (${state.room.roomId})`;
+
+          const tb = $('#queueTbl tbody'); tb.innerHTML='';
+          state.waiting.forEach(r=>{
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${r.pos}</td><td>${r.name}</td><td><small>${r.since}</small></td>`;
+            tb.appendChild(tr);
+          });
+        })
+        .withFailureHandler(err=>{
+          alert('상태 렌더 오류: ' + (err?.message || err));
+        })
+        .getState(roomId, ''); // 내 이름 안 보냄
+    }
+
+    // 이벤트 바인딩
+    $('#reloadRooms').onclick = ()=> loadRooms();
+    roomSel.onchange = render;
+    $('#refreshBtn').onclick = render;
+
+    // 참가
+    $('#joinBtn').onclick = ()=>{
+      const roomId = roomSel.value;
+      const name = nameInput.value.trim();
+      if (!roomId){ alert('먼저 방을 선택하세요'); return; }
+      if (!name){ alert('이름/닉네임을 입력하세요'); return; }
+      google.script.run
+        .withSuccessHandler(res=>{
+          if (!res || !res.ok){ alert((res&&res.message)||'등록 중 오류'); return; }
+          // 토큰 저장(본인 삭제용)
+          try{
+            const LS_KEY='AQ_SECURE_KEYS';
+            const key = JSON.parse(localStorage.getItem(LS_KEY)||'{}');
+            key[roomId] = key[roomId] || {};
+            key[roomId][name] = res.entryId;
+            localStorage.setItem(LS_KEY, JSON.stringify(key));
+          }catch(e){}
+          alert(res.message + (res.entryId ? '\n(이 브라우저에 삭제 토큰이 저장되었습니다)' : ''));
+          render();
+        })
+        .withFailureHandler(err=>{
+          alert('등록 오류: ' + (err?.message || err));
+        })
+        .joinQueue(roomId, name);
+    };
+
+    // 삭제(본인만: entryId 필요)
+    $('#leaveBtn').onclick = ()=>{
+      const roomId = roomSel.value;
+      const name = nameInput.value.trim();
+      if (!roomId){ alert('먼저 방을 선택하세요'); return; }
+      if (!name){ alert('이름/닉네임을 입력하세요'); return; }
+      let entryId = '';
+      try{
+        const LS_KEY='AQ_SECURE_KEYS';
+        const key = JSON.parse(localStorage.getItem(LS_KEY)||'{}');
+        entryId = (key[roomId]||{})[name] || '';
+      }catch(e){}
+      if (!entryId){
+        alert('삭제 토큰이 없어 취소할 수 없습니다.\n→ 운영자에게 삭제 요청하세요.');
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(res=>{
+          alert(res.message || (res.ok?'처리됨':'실패'));
+          if (res && res.ok){
+            try{
+              const LS_KEY='AQ_SECURE_KEYS';
+              const key = JSON.parse(localStorage.getItem(LS_KEY)||'{}');
+              if (key[roomId] && key[roomId][name]) {
+                delete key[roomId][name];
+                if (!Object.keys(key[roomId]).length) delete key[roomId];
+                localStorage.setItem(LS_KEY, JSON.stringify(key));
+              }
+            }catch(e){}
+          }
+          render();
+        })
+        .withFailureHandler(err=>{
+          alert('삭제 오류: ' + (err?.message || err));
+        })
+        .leaveQueueById(roomId, entryId);
+    };
+
+    // ===== 관리자 기능 =====
+    $('#mkRoomBtn').onclick = ()=>{
+      const key = adminkeyInput.value.trim();
+      const rn  = newRoomNameInput.value.trim();
+      if (!rn){ alert('새 방 이름을 입력하세요'); return; }
+      google.script.run
+        .withSuccessHandler(res=>{
+          alert(res.message || (res.ok?'생성됨':'실패'));
+          if (res && res.ok) loadRooms(res.roomId);
+        })
+        .withFailureHandler(err=>{
+          alert('방 만들기 오류: ' + (err?.message || err));
+        })
+        .createRoom(key, rn);
+    };
+
+    $('#deactRoomBtn').onclick = ()=>{
+      const key = adminkeyInput.value.trim();
+      const rid = roomSel.value;
+      if (!rid){ alert('비활성화할 방을 선택하세요'); return; }
+      if (!confirm('현재 방을 비활성화합니다. 계속할까요?')) return;
+      google.script.run
+        .withSuccessHandler(res=>{
+          alert(res.message || (res.ok?'비활성화됨':'실패'));
+          loadRooms();
+        })
+        .withFailureHandler(err=>{
+          alert('방 비활성화 오류: ' + (err?.message || err));
+        })
+        .deactivateRoom(key, rid);
+    };
+
+    $('#nextBtn').onclick = ()=>{
+      const key = adminkeyInput.value.trim();
+      const rid = roomSel.value;
+      if (!rid){ alert('방을 선택하세요'); return; }
+      google.script.run
+        .withSuccessHandler(res=>{
+          $('#adminMsg').innerHTML = `<small>${res.message || (res.ok?'호출됨':'실패')}</small>`;
+          render();
+        })
+        .withFailureHandler(err=>{
+          alert('다음 호출 오류: ' + (err?.message || err));
+        })
+        .nextUp(key, rid);
+    };
+
+    $('#finishBtn').onclick = ()=>{
+      const key = adminkeyInput.value.trim();
+      const rid = roomSel.value;
+      if (!rid){ alert('방을 선택하세요'); return; }
+      google.script.run
+        .withSuccessHandler(res=>{
+          $('#adminMsg').innerHTML = `<small>${res.message || (res.ok?'완료됨':'실패')}</small>`;
+          render();
+        })
+        .withFailureHandler(err=>{
+          alert('완료 처리 오류: ' + (err?.message || err));
+        })
+        .finishCurrent(key, rid);
+    };
+
+    $('#delBtn').onclick = ()=>{
+      const key = adminkeyInput.value.trim();
+      const rid = roomSel.value;
+      const n   = delNameInput.value.trim();
+      if (!rid){ alert('방을 선택하세요'); return; }
+      if (!n){ alert('삭제할 이름을 입력하세요'); return; }
+      google.script.run
+        .withSuccessHandler(res=>{
+          $('#adminMsg').innerHTML = `<small>${res.message || (res.ok?'삭제됨':'실패')}</small>`;
+          render();
+        })
+        .withFailureHandler(err=>{
+          alert('이름 삭제 오류: ' + (err?.message || err));
+        })
+        .adminDeleteByName(key, rid, n);
+    };
+
+    $('#clearBtn').onclick = ()=>{
+      const key = adminkeyInput.value.trim();
+      const rid = roomSel.value;
+      if (!rid){ alert('방을 선택하세요'); return; }
+      if (!confirm('이 방의 대기중 전원을 삭제합니다. 계속할까요?')) return;
+      google.script.run
+        .withSuccessHandler(res=>{
+          $('#adminMsg').innerHTML = `<small>${res.message || (res.ok?'초기화됨':'실패')}</small>`;
+          render();
+        })
+        .withFailureHandler(err=>{
+          alert('대기 전원 삭제 오류: ' + (err?.message || err));
+        })
+        .clearWaiting(key, rid);
+    };
+
+    // 초기 로드
+    loadRooms();
+  </script>
+</body>
+</html>
